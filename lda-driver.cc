@@ -2,6 +2,7 @@
 #include <stdlib.h> // rand
 #include <assert.h>
 #include <string.h>
+#include <algorithm>
 
 typedef struct _gibbs_lda_conf {
 	double alpha;
@@ -26,6 +27,7 @@ typedef struct _lda_result {
 	int N; // 文档总词语数 
 	int T; // 总主题数
 	int W; // # 词汇总数
+	int D; // # 文档总数
 
 } lda_result;
 
@@ -36,7 +38,7 @@ int random_range(int l, int h)
 	int range = h - l;
 	return l + rand() % range;
 }
-
+	
 lda_result* lda_result_create(int N, int T, int W, int D);
 void lda_result_destroy(lda_result * res);
 
@@ -54,7 +56,8 @@ lda_result* gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in )
 	int* dp = out->dp;
 	int* ztot = out->ztot;
 
-	int* z = malloc(N*sizeof(int));
+	int* z = (int *)malloc(N*sizeof(int));
+	int* order = (int *)malloc(N*sizeof(int));
 
 	printf("start random initialization\n");
 
@@ -71,7 +74,8 @@ lda_result* gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in )
 	lda_result_print_summary(out);
 
 	printf("determine random order update sequence \n");
-
+	for	(int i=0; i< N; i++) order[i] = i;
+	std::random_shuffle(order, order + N);
 
 	return out;
 
@@ -82,13 +86,14 @@ lda_result* lda_result_create(int N, int T, int W, int D)
 {
 	lda_result* res = NULL;
 	size_t size = sizeof(double)*N + sizeof(int)*(T + W*T + D*T);
-	char * mem = malloc(size);
+	char * mem = (char *)malloc(size);
 	memset(mem, 0, size);
 	if (mem != NULL){
-		res = malloc(sizeof(lda_result));
+		res = (lda_result *)malloc(sizeof(lda_result));
 		res->N = N;
 		res->T = T;
 		res->W = W;
+		res->D = D;
 		res->probs = (double *)mem;
 		res->wp = (int *)(mem + sizeof(double)*N);
 		res->dp = (int *)(mem + sizeof(double)*N + sizeof(int)*W*T);
@@ -103,25 +108,24 @@ void lda_result_print_summary(const lda_result* res)
 {
 	printf("\nprobs:\t");
 	int N = res->N;
-	for (int i=0; i< N; i++)
-	{
+	int T = res->T;
+	int W = res->W;
+	int D = res->D;
+	for (int i=0; i< N; i++) {
 		printf("%lf\t", res->probs[i]);
 	}
 	printf("\nwp:\t");
-	for (int i=0; i< N; i++)
-	{
+	for (int i=0; i< W*T; i++) {
 		printf("%d\t", res->wp[i]);
 	}
 
 	printf("\ndp:\t");
-	for (int i=0; i< N; i++)
-	{
+	for (int i=0; i< D*T; i++) {
 		printf("%d\t", res->dp[i]);
 	}
 
 	printf("\nztot:\t");
-	for (int i=0; i< res->T; i++)
-	{
+	for (int i=0; i< T; i++) {
 		printf("%d\t", res->ztot[i]);
 	}
 

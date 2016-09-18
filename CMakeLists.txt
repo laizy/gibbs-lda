@@ -25,13 +25,13 @@
 #
 
 cmake_minimum_required (VERSION 2.8.7)
-project (lda-driver C)
+project (lda-driver CXX)
 
 if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -ansi -pedantic -Wall")
 endif()
 
 #add_library(leptjson leptjson.c)
-add_executable(lda-driver lda-driver.c)
+add_executable(lda-driver lda-driver.cc)
 #target_link_libraries(leptjson_test leptjson)
 
