@@ -1,2 +1,11 @@
+# Compiled files
+*.o
+*.so
+*.rlib
+*.dll
+*.class
 
-build/*
+# Executables
+*.exe
+
+build
