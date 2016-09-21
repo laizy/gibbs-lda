@@ -321,6 +321,46 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 	fout.close();
 
 
+	std::vector<std::string> topic(conf.T);
+	for (int ti = 0; ti < conf.T; ti++)
+	{
+		struct wordtopic {
+			int wi;
+			int ti;
+			int count;
+		};
+		std::vector<wordtopic> wordtopics;
+		for (int wi = 0; wi < W; wi++)
+		{
+			int count = out->wp[wi*T + ti];
+			if (count != 0) {
+				wordtopics.push_back({ wi, ti, count });
+			}
+		}
+		std::sort(wordtopics.begin(), wordtopics.end(), 
+			[](wordtopic a, wordtopic b) { 
+				return a.count > b.count; 
+		});
+
+		if (wordtopics.size() > 15) {
+			wordtopics.resize(15);
+		}
+
+		std::string str = "";
+		std::for_each(wordtopics.begin(), wordtopics.end(), [&](wordtopic wt) {
+			str += cihui[wt.wi] + "\t";
+		});
+		
+		topic[ti] =str;
+	}
+
+	std::ofstream fout("result.txt", std::ios::out);
+	std::for_each(topic.begin(), topic.end(), [&](std::string str) {
+		fout << str.c_str() << std::endl;
+	});
+	fout.close();
+
+
 	lda_result_destroy(out);
 
 }
@@ -399,10 +439,7 @@ void lda_test(int seed)
 }
 
 
-#include <codecvt>
-#include <iostream>
 
-// codecvt_utf8: writing UTF-32 string as UTF-8
 #include <iostream>
 #include <locale>
 #include <string>
