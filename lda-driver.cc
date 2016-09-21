@@ -302,8 +302,8 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 				return a.count > b.count; 
 		});
 
-		if (wordtopics.size() > 15) {
-			wordtopics.resize(15);
+		if (wordtopics.size() > 25) {
+			wordtopics.resize(25);
 		}
 
 		std::string str = "";
@@ -325,12 +325,6 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 
 }
 
-void test_words()
-{
-	const char* a = "a b c d e aa bb a d c ee bb";
-
-}
-
 int heap_test() {
 	int myints[] = { 10,20,30,5,15 };
 	auto comp = [](int a, int b) {return a > b; };
@@ -339,7 +333,6 @@ int heap_test() {
 	myints[4] = 90;
 	std::push_heap(myints, myints + 5, comp);
 	std::sort_heap(myints, myints + 5, comp);
-	
 
 	std::vector<int> v(myints, myints + 5);
 
@@ -375,9 +368,9 @@ void lda_test(int seed)
 	std::vector<int> d(N);
 	for (int i = 0; i < N; i++) {
 		fws >> w[i];
-		w[i] --;
+//		w[i] --;
 		fds >> d[i];
-		d[i]--;
+//		d[i]--;
 	}
 	fws.close();
 	fds.close();
@@ -406,9 +399,84 @@ void lda_test(int seed)
 }
 
 
+#include <codecvt>
+#include <iostream>
+
+// codecvt_utf8: writing UTF-32 string as UTF-8
+#include <iostream>
+#include <locale>
+#include <string>
+#include <codecvt>
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
+
+//注意：当字符串为空时，也会返回一个空字符串  
+void split(std::string& s, char delim, std::vector< std::string >* ret)
+{
+	size_t last = 0;
+	size_t index = s.find_first_of(delim, last);
+	while (index != std::string::npos) {
+		ret->push_back(s.substr(last, index - last));
+		last = index + 1;
+		index = s.find_first_of(delim, last);
+	}
+	if (index - last>0) {
+		ret->push_back(s.substr(last, index - last));
+	}
+}
+
+void process_text()
+{
+	using namespace std;
+
+	ifstream fdocs("docs.txt");
+	ofstream fwords("words.txt");
+	ofstream fds("ds.txt");
+	ofstream fws("ws.txt");
+	string line;
+
+	std::unordered_map<std::string, int> words_map;
+
+	std::vector<std::string> docswords;
+	int W = 0;
+	int ntokens = 0;
+	int D = 0;
+	std::ostringstream ds;
+	std::ostringstream ws;
+	std::ostringstream words;
+	while ( getline(fdocs, line) ) {
+		split(line, '\t', &docswords);
+		if (docswords.size() > 0) {
+			std::for_each(docswords.begin(), docswords.end(), [&](std::string word) {
+				if (words_map.find(word) == words_map.end()) {
+					words_map[word] = W++;
+					words << word << "\n";
+				}
+				
+				ntokens ++;
+				ws << words_map[word] << "\n";
+				ds << D << "\n";
+			});
+			D++;
+		}
+		docswords.clear();
+	}
+
+	fds << ntokens << "\n" << ds.str();
+	fws << ntokens << "\n" << ws.str();
+	fwords << W << "\n" << words.str();
+	fdocs.close();
+	fds.close();
+	fws.close();
+
+}
+
+
 int main(int argc, char*argv[])
 {
-	lda_test(argc);
+	process_text();
+	//lda_test(argc);
 	//heap_test();
 
 	return 0;
