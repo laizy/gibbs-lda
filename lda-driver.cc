@@ -7,6 +7,8 @@
 #include <cstring>
 #include <string>
 #include <fstream>
+#include <sstream>
+#include <unordered_map>
 
 
 typedef struct _gibbs_lda_conf {
@@ -41,6 +43,72 @@ typedef struct _lda_result {
 
 lda_result* lda_result_create(int N, int T, int W, int D);
 void lda_result_destroy(lda_result * res);
+
+lda_result* lda_result_load( const char* file_name)
+{
+	int D , T , W , N ;
+	std::ifstream fin(file_name);
+	fin >> D >> N  >> W  >> T ;
+
+	lda_result* result = lda_result_create(N, T, W, D);
+	
+	for (int wi = 0; wi < result->W; wi++) {
+		for (int ti = 0; ti < result->T; ti++) {
+			fin >> result->wp[wi*T + ti] ;
+		}
+	}
+
+	for (int di = 0; di < result->D; di++) {
+		for (int ti = 0; ti < result->T; ti++) {
+			fin >> result->wp[di*T + ti] ;
+		}
+	}
+
+	for (int ti = 0; ti < result->T; ti++) {
+		fin >> result->ztot[ti] ;
+	}
+
+	for (int i = 0; i < result->N; i++) {
+		fin >> result->z[i] ;
+	}
+
+	fin.close();
+
+	return result;
+}
+
+void lda_result_save(const lda_result* result, const char* file_name)
+{
+	int D = result->D, T = result->T, W = result->W, N = result->N;
+	std::ofstream fout(file_name);
+	fout << D << "\t" << N << "\t" << W << "\t" << T << "\n";
+	
+	for (int wi = 0; wi < result->W; wi++) {
+		for (int ti = 0; ti < result->T; ti++) {
+			fout << result->wp[wi*T + ti] << "\t";
+		}
+		fout << "\n";
+	}
+
+	for (int di = 0; di < result->D; di++) {
+		for (int ti = 0; ti < result->T; ti++) {
+			fout << result->wp[di*T + ti] << "\t";
+		}
+		fout << "\n";
+	}
+
+	for (int ti = 0; ti < result->T; ti++) {
+		fout << result->ztot[ti] << "\t";
+	}
+	fout << "\n";
+
+	for (int i = 0; i < result->N; i++) {
+		fout << result->z[i] << "\t";
+	}
+	fout << "\n";
+
+	fout.close();
+}
 
 void lda_result_print_summary(const lda_result* res);
 
@@ -281,6 +349,8 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 	auto time_end = std::time(0);
 	std::cout << "total time:" << time_end - time_start << "\n";
 
+	lda_result_save(out, "lda_result.txt");
+
 	std::vector<std::string> topic(conf.T);
 	for (int ti = 0; ti < conf.T; ti++)
 	{
@@ -321,49 +391,94 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 	fout.close();
 
 
-	std::vector<std::string> topic(conf.T);
-	for (int ti = 0; ti < conf.T; ti++)
-	{
-		struct wordtopic {
-			int wi;
-			int ti;
-			int count;
-		};
-		std::vector<wordtopic> wordtopics;
-		for (int wi = 0; wi < W; wi++)
-		{
-			int count = out->wp[wi*T + ti];
-			if (count != 0) {
-				wordtopics.push_back({ wi, ti, count });
-			}
-		}
-		std::sort(wordtopics.begin(), wordtopics.end(), 
-			[](wordtopic a, wordtopic b) { 
-				return a.count > b.count; 
-		});
+	lda_result_destroy(out);
 
-		if (wordtopics.size() > 15) {
-			wordtopics.resize(15);
-		}
+}
 
-		std::string str = "";
-		std::for_each(wordtopics.begin(), wordtopics.end(), [&](wordtopic wt) {
-			str += cihui[wt.wi] + "\t";
-		});
-		
-		topic[ti] =str;
+double divergence_KL(int*w1, int* w2, int N)
+{
+	int sum1 = 0, sum2 = 0;
+	double KL12 = 0.0, KL21 = 0.0;
+	for (int i = 0; i < N; i++) {
+		KL12 += w1[i] * log2((w1[i] + 1e-5) / (w2[i] + 1e-5));
+		KL21 += w2[i] * log2((w2[i] + 1e-5) / (w1[i] + 1e-5));
+		sum1 += w1[i];
+		sum2 += w2[i];
+	}
+	return 0.5*(KL12 / sum1 + KL21 / sum2);
+}
+
+void lda_words_similary( )
+{
+
+#if MEM_CHECK
+	set_memory_leak_detect();
+#endif
+
+	lda_result* out = lda_result_load("lda_result.txt");
+	int T = out->T;
+	int N = out->N;
+	int D = out->D;
+	int W;
+	std::ifstream fwords("words.txt", std::ios::in);
+	fwords >> W;
+
+	assert(W == out->W);
+
+	std::vector<std::string> cihui(W);
+	for (size_t i = 0; i < W; i++) {
+		std::string str;
+		fwords >> str;
+		cihui[i] = str;
 	}
 
-	std::ofstream fout("result.txt", std::ios::out);
-	std::for_each(topic.begin(), topic.end(), [&](std::string str) {
-		fout << str.c_str() << std::endl;
-	});
-	fout.close();
 
+	const int NP = 10;
+	struct word_pair {
+		int wi;
+		int wj;
+		double skl;  // 对称KL 散度
+	};
+
+	std::vector<word_pair> wordpairs;
+	wordpairs.reserve(NP + 1);
+	auto word_pair_comp = [](word_pair a, word_pair b) {
+		return a.skl < b.skl;
+	};
+
+	std::ofstream fsimi("word_similarity.txt", std::ios::out);
+	for (int wi = 0; wi < W; wi++) {
+		wordpairs.clear();
+		for (int wj = 0; wj < W; wj++) {
+			if (wi == wj) continue;
+
+			double skl = divergence_KL(&(out->wp[wi*T]), &(out->wp[wj*T]), T);
+			if (wordpairs.size() < NP) {
+				wordpairs.push_back({ wi, wj, skl });
+				std::push_heap(wordpairs.begin(), wordpairs.end(), word_pair_comp);
+			} else if (skl < wordpairs[0].skl) {
+				wordpairs.push_back({ wi, wj, skl });
+				std::push_heap(wordpairs.begin(), wordpairs.end(), word_pair_comp);
+				std::pop_heap(wordpairs.begin(), wordpairs.end(), word_pair_comp);
+				wordpairs.pop_back();
+			}
+		}
+		std::sort_heap(wordpairs.begin(), wordpairs.end(), word_pair_comp);
+		std::ostringstream str;
+		str << cihui[wi] << "\t";
+		std::for_each(wordpairs.begin(), wordpairs.end(), [&](word_pair wp) {
+			str << cihui[wp.wj] << ":" << wp.skl << "\t";
+		});
+		str << "\n";
+		fsimi << str.str();
+	}
+
+	fsimi.close();
 
 	lda_result_destroy(out);
 
 }
+
 
 int heap_test() {
 	int myints[] = { 10,20,30,5,15 };
@@ -408,9 +523,9 @@ void lda_test(int seed)
 	std::vector<int> d(N);
 	for (int i = 0; i < N; i++) {
 		fws >> w[i];
-//		w[i] --;
+		w[i] --;
 		fds >> d[i];
-//		d[i]--;
+		d[i]--;
 	}
 	fws.close();
 	fds.close();
@@ -440,13 +555,6 @@ void lda_test(int seed)
 
 
 
-#include <iostream>
-#include <locale>
-#include <string>
-#include <codecvt>
-#include <fstream>
-#include <sstream>
-#include <unordered_map>
 
 //注意：当字符串为空时，也会返回一个空字符串  
 void split(std::string& s, char delim, std::vector< std::string >* ret)
@@ -512,8 +620,9 @@ void process_text()
 
 int main(int argc, char*argv[])
 {
-	process_text();
-	//lda_test(argc);
+	//process_text();
+	lda_test(argc);
+	lda_words_similary();
 	//heap_test();
 
 	return 0;
