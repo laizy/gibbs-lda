@@ -10,6 +10,9 @@
 #include <sstream>
 #include <unordered_map>
 
+#include <spdlog\spdlog.h>
+#include <spdlog\fmt\fmt.h>
+
 
 typedef struct _gibbs_lda_conf {
 	double alpha;
@@ -44,6 +47,25 @@ typedef struct _lda_result {
 lda_result* lda_result_create(int N, int T, int W, int D);
 void lda_result_destroy(lda_result * res);
 
+void report_progress(int current, int total, int width) {
+	std::string bar = "";
+	if (current == total) {
+		bar = "complete !";
+		for (int i=0; i < width; i++) bar += " ";
+		bar += "\n";
+	}else {
+		bar = "[";
+		double percent = 100.0 *current / total;
+		int i = 0;
+		for (; i*total < current*width; i++) bar += "=";
+		bar += fmt::format("{:.2f}%=>", percent);
+		for (; i < width; i++) bar += "-";
+		bar += "]\r";
+	}
+
+	std::cout << bar;
+}
+
 lda_result* lda_result_load( const char* file_name)
 {
 	int D , T , W , N ;
@@ -77,37 +99,65 @@ lda_result* lda_result_load( const char* file_name)
 	return result;
 }
 
-void lda_result_save(const lda_result* result, const char* file_name)
+const char LDA_FILE_SIGN[10] = "LDA_MODAL";
+const char LDA_FILE_PLACEHOLDER[10] = "LDA_HOLDE";
+
+int lda_result_save(const lda_result* result, const char* file_name)
 {
 	int D = result->D, T = result->T, W = result->W, N = result->N;
-	std::ofstream fout(file_name);
-	fout << D << "\t" << N << "\t" << W << "\t" << T << "\n";
-	
-	for (int wi = 0; wi < result->W; wi++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fout << result->wp[wi*T + ti] << "\t";
-		}
-		fout << "\n";
+	FILE* file = fopen(file_name, "wb");
+	if (file == NULL) {
+		std::cout << "can not open file:" << file_name << std::endl;
+		goto write_error;
 	}
 
-	for (int di = 0; di < result->D; di++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fout << result->wp[di*T + ti] << "\t";
-		}
-		fout << "\n";
+	// 先在开始出占位，后面写完后进行覆盖
+	int len = sizeof(LDA_FILE_SIGN) - 1;
+	if (fwrite(LDA_FILE_PLACEHOLDER, len, 1, file) != 1 ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
 	}
 
-	for (int ti = 0; ti < result->T; ti++) {
-		fout << result->ztot[ti] << "\t";
-	}
-	fout << "\n";
 
-	for (int i = 0; i < result->N; i++) {
-		fout << result->z[i] << "\t";
+	int meta[4] = { D, N, W, T };
+	if (fwrite(meta, sizeof(meta), 1, file) != 1 ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
 	}
-	fout << "\n";
 
-	fout.close();
+	if (fwrite(result->wp, sizeof(result->wp[0]), W *T, file) != W*T ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
+	}
+
+	if (fwrite(result->dp, sizeof(result->dp[0]), D *T, file) != D*T ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
+	}
+
+	if (fwrite(result->ztot, sizeof(result->ztot[0]), T, file) != T ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
+	}
+
+	if (fwrite(result->z, sizeof(result->z[0]), N, file) != N ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
+	}
+
+	rewind(file);  // 跳到文件开始处
+	len = sizeof(LDA_FILE_SIGN) - 1;
+	if (fwrite(LDA_FILE_SIGN, len, 1, file) != 1 ) {
+		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
+		goto write_error;
+	}
+
+	fclose(file);
+	return 0;
+
+write_error :
+	fclose(file);
+	return -1;
 }
 
 void lda_result_print_summary(const lda_result* res);
@@ -150,6 +200,8 @@ int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out 
 	std::uniform_real_distribution<double> real_random(0.0, 1.0);
 
 	for (int iter = 0, totiter = conf.num_iter; iter < totiter; iter++) {
+		report_progress(iter, totiter, 100);
+
 		for (int ii	= 0; ii < N; ii++) {
 			int i = order[ii];
 			int wi = w[i], di = d[i], ti = z[i];
@@ -180,6 +232,7 @@ int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out 
 		}
 	}
 
+	report_progress(1, 1, 100);
 
 	free(order);
 	free(topic_probs);
@@ -317,7 +370,8 @@ void set_memory_leak_detect()
 }
 #endif
 
-void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vector<std::string> & cihui)
+void lda_driver(int seed, int* words, int* docs, int N, int W, int D, 
+	std::vector<std::string> & cihui, std::string& out_name)
 {
 
 #if MEM_CHECK
@@ -349,19 +403,17 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 	auto time_end = std::time(0);
 	std::cout << "total time:" << time_end - time_start << "\n";
 
-	lda_result_save(out, "lda_result.txt");
+	lda_result_save(out, out_name.c_str());
 
 	std::vector<std::string> topic(conf.T);
-	for (int ti = 0; ti < conf.T; ti++)
-	{
+	for (int ti = 0; ti < conf.T; ti++) {
 		struct wordtopic {
 			int wi;
 			int ti;
 			int count;
 		};
 		std::vector<wordtopic> wordtopics;
-		for (int wi = 0; wi < W; wi++)
-		{
+		for (int wi = 0; wi < W; wi++) {
 			int count = out->wp[wi*T + ti];
 			if (count != 0) {
 				wordtopics.push_back({ wi, ti, count });
@@ -390,9 +442,7 @@ void lda_driver(int seed, int* words, int* docs, int N, int W, int D, std::vecto
 	});
 	fout.close();
 
-
 	lda_result_destroy(out);
-
 }
 
 double divergence_KL(int*w1, int* w2, int N)
@@ -480,82 +530,6 @@ void lda_words_similary( )
 }
 
 
-int heap_test() {
-	int myints[] = { 10,20,30,5,15 };
-	auto comp = [](int a, int b) {return a > b; };
-	std::make_heap(myints, myints + 5, comp);
-	std::pop_heap(myints, myints + 5, comp);
-	myints[4] = 90;
-	std::push_heap(myints, myints + 5, comp);
-	std::sort_heap(myints, myints + 5, comp);
-
-	std::vector<int> v(myints, myints + 5);
-
-	std::make_heap(v.begin(), v.end());
-	std::cout << "initial max heap   : " << v.front() << '\n';
-
-	std::pop_heap(v.begin(), v.end()); v.pop_back();
-	std::cout << "max heap after pop : " << v.front() << '\n';
-
-	v.push_back(99); std::push_heap(v.begin(), v.end());
-	std::cout << "max heap after push: " << v.front() << '\n';
-
-	std::sort_heap(v.begin(), v.end());
-
-	std::cout << "final sorted range :";
-	for (unsigned i = 0; i<v.size(); i++)
-		std::cout << ' ' << v[i];
-
-	std::cout << '\n';
-
-	return 0;
-}
-
-void lda_test(int seed)
-{
-	std::ifstream fws("WS.txt", std::ios::in);
-	std::ifstream fds("DS.txt", std::ios::in);
-	int N = 0, N2;
-	fws >> N;
-	fds >> N2;
-	assert(N == N2);
-	std::vector<int> w(N);
-	std::vector<int> d(N);
-	for (int i = 0; i < N; i++) {
-		fws >> w[i];
-		w[i] --;
-		fds >> d[i];
-		d[i]--;
-	}
-	fws.close();
-	fds.close();
-
-	auto minmax_d = std::minmax_element(d.begin(), d.end());
-	auto minmax_w = std::minmax_element(w.begin(), w.end());
-	assert(*(minmax_d.first) == 0);
-	assert(*(minmax_w.first) == 0);
-	int W1 = *(minmax_w.second);
-	int D = *(minmax_d.second);
-
-	int W ;
-	std::ifstream fwords("words.txt", std::ios::in);
-	fwords >> W;
-
-	std::vector<std::string> words(W);
-	for (size_t i = 0; i < W; i++)
-	{
-		std::string str;
-
-		fwords >> str;
-		words[i] = str;
-	}
-
-	lda_driver(seed, &w[0], &d[0], N, W, D, words);
-}
-
-
-
-
 //注意：当字符串为空时，也会返回一个空字符串  
 void split(std::string& s, char delim, std::vector< std::string >* ret)
 {
@@ -614,14 +588,245 @@ void process_text()
 	fdocs.close();
 	fds.close();
 	fws.close();
+}
+
+void process_text2(std::string& docs_file, std::string& out_file)
+{
+	using namespace std;
+
+	ifstream fdocs(docs_file, std::ios::in);
+	ofstream fwords(out_file + ".words.txt");
+	ofstream fds(out_file + ".ds.txt");
+	ofstream fws(out_file + ".ws.txt");
+	string line;
+
+	std::unordered_map<std::string, int> words_map;
+
+	std::vector<std::string> docswords;
+	int W = 0;
+	int ntokens = 0;
+	int D = 0;
+	std::ostringstream ds;
+	std::ostringstream ws;
+	std::ostringstream words;
+	while (getline(fdocs, line)) {
+		split(line, '\t', &docswords);
+		if (docswords.size() > 0) {
+			std::for_each(docswords.begin(), docswords.end(), [&](std::string word) {
+				if (words_map.find(word) == words_map.end()) {
+					words_map[word] = W++;
+					words << word << "\n";
+				}
+
+				ntokens++;
+				ws << words_map[word] << "\n";
+				ds << D << "\n";
+			});
+			D++;
+		}
+		docswords.clear();
+	}
+
+	fds << ntokens << "\n" << ds.str();
+	fws << ntokens << "\n" << ws.str();
+	fwords << W << "\n" << words.str();
+	fdocs.close();
+	fds.close();
+	fws.close();
+}
+
+
+void lda_train(int seed, std::string& corpus_name, std::string& out_name)
+{
+	std::ifstream fws(corpus_name + ".ws.txt", std::ios::in);
+	std::ifstream fds(corpus_name + ".ds.txt", std::ios::in);
+	int N = 0, N2;
+	fws >> N;
+	fds >> N2;
+	assert(N == N2);
+	std::vector<int> w(N);
+	std::vector<int> d(N);
+	for (int i = 0; i < N; i++) {
+		fws >> w[i];
+		fds >> d[i];
+	}
+
+	fws.close();
+	fds.close();
+
+	auto minmax_d = std::minmax_element(d.begin(), d.end());
+	auto minmax_w = std::minmax_element(w.begin(), w.end());
+	assert(*(minmax_d.first) == 0);
+	assert(*(minmax_w.first) == 0);
+	int W = *(minmax_w.second);
+	int D = *(minmax_d.second);
+
+	int T = 50;
+	gibbs_lda_conf conf = { 0.01, 0.001, 2, 3, 100, 100 };
+	conf.T = T;
+	conf.seed = seed;
+
+	lda_input input;
+	input.N = N;
+	input.W = W;
+	input.D = D;
+	input.d = &d[0];
+	input.w = &w[0];
+
+	lda_result* out = lda_result_create(input.N, conf.T, input.W, input.D);
+	auto time_start = std::time(0);
+	int info = gibbs_sampler_lda(conf, &input, out);
+	auto time_end = std::time(0);
+	std::cout << "total time:" << time_end - time_start << "\n";
+
+	lda_result_save(out, out_name.c_str());
+
+	lda_result_destroy(out);
+
+}
+
+#include "cmdline.h"
+
+void configure_parser(cmdline::parser& parser) {
+
+	parser.add<std::string>("action", '\0',
+		"action type: preprocess, train, onlinetrain, predict", 
+		true, "preprocess", 
+		cmdline::oneof<std::string>("preprocess", "train", "onlinetrain", "predict")
+	);
+}
+
+void print_usage(char* program)
+{
+	std::cout<< program << "usage:bbbbb\n" << std::endl;
+}
+
+void configure_parser_preprocess(cmdline::parser& parser) {
+	parser.add<std::string>("docs", 'd',
+		"documents file to be processed",
+		true, "" );
+	parser.add<std::string>("output", 'o',
+		"output file to be saved",
+		true, "" );
+	parser.add("help", 0, "print this message");
+	parser.footer("filename ...");
+}
+
+void configure_parser_train(cmdline::parser& parser) {
+	parser.add<std::string>("corpus", '\0',
+		"corpus file which is the ouput of preprocess subcmd",
+		true, "" );
+	parser.add<std::string>("output", 'o',
+		"output file to be saved",
+		true, "" );
+	parser.add("help", 0, "print this message");
+	parser.footer("filename ...");
+}
+
+void configure_parser_predict(cmdline::parser& parser) {
+	parser.add<std::string>("model", '\0',
+		"model file saved by train subcmd",
+		true, "" );
+	parser.add<std::string>("docs", 'd',
+		"docs file to be predicted",
+		true, "" );
+	parser.add<std::string>("output", 'o',
+		"output file to be saved",
+		true, "" );
+	parser.add("help", 0, "print this message");
+	parser.footer("filename ...");
+}
+
+void parser_check(cmdline::parser& parser, int argc, char * * argv)
+{
+	bool ok = parser.parse(argc, argv);
+
+	if (argc == 1 || parser.exist("help")) {
+		std::cerr << parser.usage();
+		exit(-1);
+	}
+
+	if (!ok) {
+		std::cerr << parser.error() << std::endl << parser.usage();
+		exit(-1);
+	}
 
 }
 
 
-int main(int argc, char*argv[])
+int main(int argc, char** argv) {
+
+try {
+	if (argc == 1) {
+		print_usage(argv[0]);
+		return -1;
+	}
+	// create a parser
+	cmdline::parser parser;
+
+	std::string subcmd = std::string(argv[1]);
+	if (subcmd == "preprocess") {
+		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
+		configure_parser_preprocess(parser);
+		parser_check(parser, argc - 1, argv + 1);
+
+		auto docs_file = parser.get<std::string>("docs");
+		auto out_file = parser.get<std::string>("output");
+		process_text2(docs_file, out_file);
+	} else if (subcmd == "train") {
+		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
+		configure_parser_train(parser);
+		parser_check(parser, argc - 1, argv + 1);
+
+		auto corpus_file = parser.get<std::string>("corpus");
+		auto out_file = parser.get<std::string>("output");
+		int seed = argc;
+		lda_train(seed, corpus_file, out_file);
+		
+	} else if (subcmd == "predict") {
+		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
+		configure_parser_predict(parser);
+		parser_check(parser, argc - 1, argv + 1);
+
+		auto corpus_file = parser.get<std::string>("model");
+		auto docs_file = parser.get<std::string>("docs");
+		auto out_file = parser.get<std::string>("output");
+		int seed = argc;
+		std::cout << "corpus:" << corpus_file << "\tdocs:" << docs_file << std::endl;
+
+	} else if (subcmd == "wordsimilarity") {
+		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
+		configure_parser_predict(parser);
+		parser_check(parser, argc - 1, argv + 1);
+
+		auto corpus_file = parser.get<std::string>("model");
+		auto docs_file = parser.get<std::string>("docs");
+		auto out_file = parser.get<std::string>("output");
+		int seed = argc;
+		std::cout << "corpus:" << corpus_file << "\tdocs:" << docs_file << std::endl;
+	}
+	
+return		0;
+
+	// boolean flags are referred by calling exist() method.
+	if (parser.exist("gzip")) std::cout << "gzip" << std::endl;
+
+}
+catch (const cmdline::cmdline_error& e) {
+	std::cerr << e.what() << std::endl;
+	return -1;
+}
+catch (const std::exception & e) {
+	std::cerr << e.what() << std::endl;
+	return -1;
+}
+
+	return 0;
+}
+
+int __main(int argc, char*argv[])
 {
 	//process_text();
-	lda_test(argc);
 	lda_words_similary();
 	//heap_test();
 
