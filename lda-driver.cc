@@ -47,14 +47,14 @@ typedef struct _lda_result {
 lda_result* lda_result_create(int N, int T, int W, int D);
 void lda_result_destroy(lda_result * res);
 
-void report_progress(int current, int total, int width) {
-	std::string bar = "";
+void report_progress(int current, int total, int width, const char * prefix) {
+	std::string bar = prefix;
 	if (current == total) {
-		bar = "complete !";
+		bar += "complete !";
 		for (int i=0; i < width; i++) bar += " ";
 		bar += "\n";
 	}else {
-		bar = "[";
+		bar += "[";
 		double percent = 100.0 *current / total;
 		int i = 0;
 		for (; i*total < current*width; i++) bar += "=";
@@ -66,38 +66,6 @@ void report_progress(int current, int total, int width) {
 	std::cout << bar;
 }
 
-lda_result* lda_result_load( const char* file_name)
-{
-	int D , T , W , N ;
-	std::ifstream fin(file_name);
-	fin >> D >> N  >> W  >> T ;
-
-	lda_result* result = lda_result_create(N, T, W, D);
-	
-	for (int wi = 0; wi < result->W; wi++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fin >> result->wp[wi*T + ti] ;
-		}
-	}
-
-	for (int di = 0; di < result->D; di++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fin >> result->wp[di*T + ti] ;
-		}
-	}
-
-	for (int ti = 0; ti < result->T; ti++) {
-		fin >> result->ztot[ti] ;
-	}
-
-	for (int i = 0; i < result->N; i++) {
-		fin >> result->z[i] ;
-	}
-
-	fin.close();
-
-	return result;
-}
 
 const char LDA_FILE_SIGN[10] = "LDA_MODAL";
 const char LDA_FILE_PLACEHOLDER[10] = "LDA_HOLDE";
@@ -108,7 +76,7 @@ int lda_result_save(const lda_result* result, const char* file_name)
 	FILE* file = fopen(file_name, "wb");
 	if (file == NULL) {
 		std::cout << "can not open file:" << file_name << std::endl;
-		goto write_error;
+		return -1;
 	}
 
 	// 先在开始出占位，后面写完后进行覆盖
@@ -117,7 +85,6 @@ int lda_result_save(const lda_result* result, const char* file_name)
 		std::cout << "write error file:"<<__FILE__<<"\tline:"<<__LINE__ <<std::endl;
 		goto write_error;
 	}
-
 
 	int meta[4] = { D, N, W, T };
 	if (fwrite(meta, sizeof(meta), 1, file) != 1 ) {
@@ -160,6 +127,65 @@ write_error :
 	return -1;
 }
 
+lda_result* lda_result_load( const char* file_name)
+{
+	lda_result* result = NULL;
+	FILE* file = fopen(file_name, "rb");
+	if (file == NULL) {
+		std::cout << "can not open file:" << file_name << std::endl;
+		return NULL;
+	}
+
+	const size_t len = sizeof(LDA_FILE_SIGN) - 1;
+	char lda_file_sign[len + 1] = { '\0' };
+	if (fread(lda_file_sign, len, 1, file) != 1) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+	if (strncmp(LDA_FILE_SIGN, lda_file_sign, len) != 0) {
+		std::cout << fmt::format(" file {} is not a valid lda model file \n", file_name);
+		goto read_error;
+	}
+
+	int  meta[4] = { 0 };
+	if (fread(meta, sizeof(int), 4, file) != 4) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	int D = meta[0], N = meta[1], W = meta[2], T = meta[3];
+
+	result = lda_result_create(N, T, W, D);
+
+	if (fread(result->wp, sizeof(result->wp[0]), W *T, file) != W*T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->dp, sizeof(result->dp[0]), D *T, file) != D*T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->ztot, sizeof(result->ztot[0]), T, file) != T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->z, sizeof(result->z[0]), N, file) != N) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	fclose(file);
+	return result;
+
+read_error:
+	fclose(file);
+	lda_result_destroy(result);
+	return NULL;
+}
+
 void lda_result_print_summary(const lda_result* res);
 
 int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out )
@@ -200,7 +226,7 @@ int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out 
 	std::uniform_real_distribution<double> real_random(0.0, 1.0);
 
 	for (int iter = 0, totiter = conf.num_iter; iter < totiter; iter++) {
-		report_progress(iter, totiter, 100);
+		report_progress(iter, totiter, 80, "gibbs sampling ");
 
 		for (int ii	= 0; ii < N; ii++) {
 			int i = order[ii];
@@ -232,7 +258,7 @@ int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out 
 		}
 	}
 
-	report_progress(1, 1, 100);
+	report_progress(1, 1, 80, "gibbs sampling ");
 
 	free(order);
 	free(topic_probs);
@@ -273,7 +299,8 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 			int wi = w[i], ti = z[i];
 
 			int wioffset = wi*T;
-			ztot[ti] --;
+			dp[ti] --;
+			//ztot[ti] --;
 
 			double beta = conf.beta, alpha = conf.alpha;
 			double wbeta = W*beta;
@@ -290,6 +317,7 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 
 			z[i] = ti;
 			dp[ti] ++;
+			//ztot[ti] ++;
 		}
 	}
 
@@ -302,23 +330,30 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 
 lda_result* lda_result_create(int N, int T, int W, int D)
 {
-	lda_result* res = NULL;
+	lda_result* res = (lda_result *)malloc(sizeof(lda_result));
+	if (res == NULL) {
+		goto error;
+	}
 	size_t size = sizeof(int)*(T + W*T + D*T + N );
 	char * mem = (char *)malloc(size);
-	memset(mem, 0, size);
-	if (mem != NULL){
-		res = (lda_result *)malloc(sizeof(lda_result));
-		res->N = N;
-		res->T = T;
-		res->W = W;
-		res->D = D;
-		res->wp = (int *)(mem );
-		res->dp = (int *)(mem + sizeof(int)*W*T);
-		res->ztot = (int *)(mem + sizeof(int)*(W+D)*T);
-		res->z    = (int *)(mem + sizeof(int) * (W + D + 1)*T);
+	if (mem == NULL) {
+		goto error;
 	}
+	memset(mem, 0, size);
+	res->N = N;
+	res->T = T;
+	res->W = W;
+	res->D = D;
+	res->wp = (int *)(mem );
+	res->dp = (int *)(mem + sizeof(int)*W*T);
+	res->ztot = (int *)(mem + sizeof(int)*(W+D)*T);
+	res->z    = (int *)(mem + sizeof(int) * (W + D + 1)*T);
 
 	return res;
+error:
+	free(mem);
+	free(res);
+	return NULL;
 }
 
 void lda_result_print_summary(const lda_result* res)
@@ -351,8 +386,10 @@ void lda_result_print_summary(const lda_result* res)
 
 void lda_result_destroy(lda_result * res)
 {
-	free(res->wp);
-	free(res);
+	if (res) {
+		free(res->wp);
+		free(res);
+	}
 }
 
 #if MEM_CHECK
@@ -458,14 +495,14 @@ double divergence_KL(int*w1, int* w2, int N)
 	return 0.5*(KL12 / sum1 + KL21 / sum2);
 }
 
-void lda_words_similary( )
+void lda_words_similary(const char * model_name )
 {
 
 #if MEM_CHECK
 	set_memory_leak_detect();
 #endif
 
-	lda_result* out = lda_result_load("lda_result.txt");
+	lda_result* out = lda_result_load(model_name);
 	int T = out->T;
 	int N = out->N;
 	int D = out->D;
@@ -481,7 +518,6 @@ void lda_words_similary( )
 		fwords >> str;
 		cihui[i] = str;
 	}
-
 
 	const int NP = 10;
 	struct word_pair {
@@ -513,6 +549,7 @@ void lda_words_similary( )
 				wordpairs.pop_back();
 			}
 		}
+
 		std::sort_heap(wordpairs.begin(), wordpairs.end(), word_pair_comp);
 		std::ostringstream str;
 		str << cihui[wi] << "\t";
@@ -636,6 +673,63 @@ void process_text2(std::string& docs_file, std::string& out_file)
 }
 
 
+#if 0
+// 还没开发完.
+void process_text3(std::string& docs_file, std::string& out_file)
+{
+	using namespace std;
+
+	ifstream fdocs(docs_file, std::ios::in);
+	ofstream fwords(out_file + ".words.txt");
+	// 文件格式: LDA_CORPUS + 文档数D(int 4 字节) + 总词汇数
+	//  + D个int(每个文档词的个数) + 每个文档的具体词语编号（长度为所有文档词的总和) 
+	//  + 词汇列表(以\n 分隔)
+	const char LDA_CORPUS[11] = "LDA_CORPUS";
+	FILE* fws = fopen((out_file + ".ws").c_str(), "wb");
+	ofstream fds(out_file + ".ds.txt");
+	ofstream fws(out_file + ".ws.txt");
+	string line;
+
+	std::unordered_map<std::string, int> words_map;
+
+	std::vector<std::string> docswords;
+	int W = 0;
+	int ntokens = 0;
+	int D = 0;
+	std::ostringstream ds;
+	std::ostringstream ws;
+	std::ostringstream words;
+	while (getline(fdocs, line)) {
+		split(line, '\t', &docswords);
+		if (docswords.size() > 0) {
+			std::for_each(docswords.begin(), docswords.end(), [&](std::string word) {
+				auto wordpos = words_map.find(word);
+				int wi = -1;
+				if (wordpos == words_map.end()) {
+					words_map[word] = wi = W++;
+					words << word << "\n";
+				} else {
+					wi = wordpos->second;
+				}
+
+				ntokens++;
+				ws << wi << "\n";
+				ds << D << "\n";
+			});
+			D++;
+		}
+		docswords.clear();
+	}
+
+	fds << ntokens << "\n" << ds.str();
+	fws << ntokens << "\n" << ws.str();
+	fwords << W << "\n" << words.str();
+	fdocs.close();
+	fds.close();
+	fws.close();
+}
+#endif
+
 void lda_train(int seed, std::string& corpus_name, std::string& out_name)
 {
 	std::ifstream fws(corpus_name + ".ws.txt", std::ios::in);
@@ -682,6 +776,32 @@ void lda_train(int seed, std::string& corpus_name, std::string& out_name)
 	lda_result_save(out, out_name.c_str());
 
 	lda_result_destroy(out);
+
+}
+
+void lda_predict(int seed, std::string& model_name, std::string& docs_name)
+{
+	lda_result* model = lda_result_load(model_name.c_str());
+
+	int T = 50;
+	gibbs_lda_conf conf = { 0.01, 0.001, 2, 3, 100, 100 };
+	conf.T = T;
+	conf.seed = seed;
+
+// dp: size T, z :size N, w : size N
+	int N = 200;
+	std::vector<int> z(N);
+	std::vector<int> dp(T);
+	std::vector<int> w(N);
+	for (int i = 0; i < N; i++) {
+		w[i] = log(i + 1);
+	}
+
+	gibbs_sampler_lda_predict(conf, &w[0], N, model, &z[0], &dp[0]);
+
+	std::for_each(std::begin(dp), std::end(dp), [](int p) { std::cout << p << "\t"; });
+
+	lda_result_destroy(model);
 
 }
 
@@ -788,11 +908,12 @@ try {
 		configure_parser_predict(parser);
 		parser_check(parser, argc - 1, argv + 1);
 
-		auto corpus_file = parser.get<std::string>("model");
+		auto model_file = parser.get<std::string>("model");
 		auto docs_file = parser.get<std::string>("docs");
 		auto out_file = parser.get<std::string>("output");
 		int seed = argc;
-		std::cout << "corpus:" << corpus_file << "\tdocs:" << docs_file << std::endl;
+		std::cout << "corpus:" << model_file << "\tdocs:" << docs_file << std::endl;
+		lda_predict(seed, model_file, docs_file);
 
 	} else if (subcmd == "wordsimilarity") {
 		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
@@ -827,7 +948,7 @@ catch (const std::exception & e) {
 int __main(int argc, char*argv[])
 {
 	//process_text();
-	lda_words_similary();
+	lda_words_similary("model-name");
 	//heap_test();
 
 	return 0;
