@@ -66,38 +66,6 @@ void report_progress(int current, int total, int width) {
 	std::cout << bar;
 }
 
-lda_result* lda_result_load( const char* file_name)
-{
-	int D , T , W , N ;
-	std::ifstream fin(file_name);
-	fin >> D >> N  >> W  >> T ;
-
-	lda_result* result = lda_result_create(N, T, W, D);
-	
-	for (int wi = 0; wi < result->W; wi++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fin >> result->wp[wi*T + ti] ;
-		}
-	}
-
-	for (int di = 0; di < result->D; di++) {
-		for (int ti = 0; ti < result->T; ti++) {
-			fin >> result->wp[di*T + ti] ;
-		}
-	}
-
-	for (int ti = 0; ti < result->T; ti++) {
-		fin >> result->ztot[ti] ;
-	}
-
-	for (int i = 0; i < result->N; i++) {
-		fin >> result->z[i] ;
-	}
-
-	fin.close();
-
-	return result;
-}
 
 const char LDA_FILE_SIGN[10] = "LDA_MODAL";
 const char LDA_FILE_PLACEHOLDER[10] = "LDA_HOLDE";
@@ -158,6 +126,65 @@ int lda_result_save(const lda_result* result, const char* file_name)
 write_error :
 	fclose(file);
 	return -1;
+}
+
+lda_result* lda_result_load( const char* file_name)
+{
+	lda_result* result = NULL;
+	FILE* file = fopen(file_name, "rb");
+	if (file == NULL) {
+		std::cout << "can not open file:" << file_name << std::endl;
+		goto read_error;
+	}
+
+	const size_t len = sizeof(LDA_FILE_SIGN) - 1;
+	char lda_file_sign[len + 1] = { '\0' };
+	if (fread(lda_file_sign, len, 1, file) != 1) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+	if (strncmp(LDA_FILE_SIGN, lda_file_sign, len) != 0) {
+		std::cout << fmt::format(" file {} is not a valid lda model file \n", file_name);
+		goto read_error;
+	}
+
+	int  meta[4] = { 0 };
+	if (fread(meta, sizeof(int), 4, file) != 4) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	int D = meta[0], N = meta[1], W = meta[2], T = meta[3];
+
+	result = lda_result_create(N, T, W, D);
+
+	if (fread(result->wp, sizeof(result->wp[0]), W *T, file) != W*T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->dp, sizeof(result->dp[0]), D *T, file) != D*T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->ztot, sizeof(result->ztot[0]), T, file) != T) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	if (fread(result->z, sizeof(result->z[0]), N, file) != N) {
+		std::cout << "read error file:" << __FILE__ << "\tline:" << __LINE__ << std::endl;
+		goto read_error;
+	}
+
+	fclose(file);
+	return result;
+
+read_error:
+	fclose(file);
+	lda_result_destroy(result);
+	return NULL;
 }
 
 void lda_result_print_summary(const lda_result* res);
@@ -351,10 +378,11 @@ void lda_result_print_summary(const lda_result* res)
 
 void lda_result_destroy(lda_result * res)
 {
-	free(res->wp);
-	free(res);
+	if (res) {
+		free(res->wp);
+		free(res);
+	}
 }
-
 #if MEM_CHECK
 #include <crtdbg.h>
 void set_memory_leak_detect()
