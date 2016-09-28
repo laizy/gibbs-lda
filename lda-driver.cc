@@ -391,7 +391,6 @@ void lda_result_destroy(lda_result * res)
 		free(res);
 	}
 }
-
 #if MEM_CHECK
 #include <crtdbg.h>
 void set_memory_leak_detect()
