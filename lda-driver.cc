@@ -266,8 +266,9 @@ int gibbs_sampler_lda(gibbs_lda_conf conf, const lda_input *in, lda_result* out 
 	return 0;
 }
 
-// dp: size T, z :size N, w : size N
-int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const lda_result* out_pre, int* z, int *dp )
+// dp: size D*T, z :size N, w : size N, d : size N
+int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, const int *d, 
+	int N, int D,  const lda_result* out_pre, int* z, int *dp )
 {
 	int T = out_pre->T;
 	int W = out_pre->T;
@@ -284,7 +285,7 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 		int topic = int_random(generator);
 		assert(topic >= 0 && topic < T);
 		z[i] = topic;
-		dp[topic] ++;
+		dp[d[i] * T + topic] ++;
 	}
 
 	for	(int i=0; i< N; i++) order[i] = i;
@@ -293,17 +294,18 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 
 	std::uniform_real_distribution<double> real_random(0.0, 1.0);
 
+	double beta = conf.beta, alpha = conf.alpha;
+	double wbeta = W*beta;
 	for (int iter = 0, totiter = conf.num_iter; iter < totiter; iter++) {
 		for (int ii	= 0; ii < N; ii++) {
 			int i = order[ii];
-			int wi = w[i], ti = z[i];
+			int wi = w[i], ti = z[i], di = d[i];
 
 			int wioffset = wi*T;
-			dp[ti] --;
+			int dioffset = di*T;
+			dp[dioffset + ti] --;
 			//ztot[ti] --;
 
-			double beta = conf.beta, alpha = conf.alpha;
-			double wbeta = W*beta;
 			topic_probs[0] = 0.0;
 			for (int tj = 0; tj < T; tj++) {
 				topic_probs[tj + 1] = topic_probs[tj] + (wp[wioffset + tj] + beta) / (ztot[tj] + wbeta) * (dp[tj] + alpha);
@@ -316,7 +318,7 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, int N, const ld
 			assert(ti < T && ti >= 0);
 
 			z[i] = ti;
-			dp[ti] ++;
+			dp[dioffset + ti] ++;
 			//ztot[ti] ++;
 		}
 	}
@@ -391,7 +393,6 @@ void lda_result_destroy(lda_result * res)
 		free(res);
 	}
 }
-
 #if MEM_CHECK
 #include <crtdbg.h>
 void set_memory_leak_detect()
@@ -783,6 +784,48 @@ void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 {
 	lda_result* model = lda_result_load(model_name.c_str());
 
+	int W = 0;
+	std::ifstream fwords("corpus.words.txt", std::ios::in);
+	fwords >> W;
+
+	std::unordered_map<std::string, int> words_map;
+	std::vector<std::string> cihui(W);
+	for (size_t i = 0; i < W; i++) {
+		std::string str;
+		fwords >> str;
+		words_map[str] = i;
+	}
+
+	using namespace std;
+	ifstream fdocs(docs_name, std::ios::in);
+	ofstream fwords(docs_name + ".predict.txt");
+	string line;
+
+	std::vector<std::string> docswords;
+	int ntokens = 0;
+	int D = 0;
+	std::ostringstream words;
+	std::vector<int> ws;
+	std::vector<int> ds;
+	while (getline(fdocs, line)) {
+		split(line, '\t', &docswords);
+		if (docswords.size() > 0) {
+			std::for_each(docswords.begin(), docswords.end(), [&](std::string word) {
+				// 如果训练词汇表里没有该词语,则忽略
+				auto wdpair = words_map.find(word);
+				if (wdpair == words_map.end()) {
+					ntokens++;
+					ws.push_back(wdpair->second);
+					ds.push_back(D);
+				}
+			});
+			D++;
+		}
+		docswords.clear();
+	}
+
+	fdocs.close();
+
 	int T = 50;
 	gibbs_lda_conf conf = { 0.01, 0.001, 2, 3, 100, 100 };
 	conf.T = T;
@@ -791,13 +834,9 @@ void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 // dp: size T, z :size N, w : size N
 	int N = 200;
 	std::vector<int> z(N);
-	std::vector<int> dp(T);
-	std::vector<int> w(N);
-	for (int i = 0; i < N; i++) {
-		w[i] = log(i + 1);
-	}
+	std::vector<int> dp(D*T);
 
-	gibbs_sampler_lda_predict(conf, &w[0], N, model, &z[0], &dp[0]);
+	gibbs_sampler_lda_predict(conf, &ws[0], &ds[0], N, D, model, &z[0], &dp[0]);
 
 	std::for_each(std::begin(dp), std::end(dp), [](int p) { std::cout << p << "\t"; });
 
