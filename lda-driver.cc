@@ -297,6 +297,8 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, const int *d,
 	double beta = conf.beta, alpha = conf.alpha;
 	double wbeta = W*beta;
 	for (int iter = 0, totiter = conf.num_iter; iter < totiter; iter++) {
+		report_progress(iter, totiter, 80, "gibbs sampling ");
+
 		for (int ii	= 0; ii < N; ii++) {
 			int i = order[ii];
 			int wi = w[i], ti = z[i], di = d[i];
@@ -322,6 +324,8 @@ int gibbs_sampler_lda_predict(gibbs_lda_conf conf, const int *w, const int *d,
 			//ztot[ti] ++;
 		}
 	}
+
+	report_progress(1, 1, 80, "gibbs sampling ");
 
 	free(order);
 	free(topic_probs);
@@ -673,33 +677,147 @@ void process_text2(std::string& docs_file, std::string& out_file)
 	fws.close();
 }
 
+// words 以\n 分隔
+int lda_corpus_load(const char* corpus_name, lda_input& input, char * *words, size_t wdsize)
+{
+	// 文件格式: LDA_CORPUS + 文档数D(int 4 字节) + 总词汇数W + 词汇列表的字节总数wdsize
+	//  + (D+1)个int(每个文档开始的偏移值, 每个文档的范围为 [di, di+1) d0 = 0  ) + 每个文档的具体词语编号（长度为所有文档词的总和) 
+	//  + 词汇列表(以\n 分隔))
+	const char LDA_CORPUS[11] = "LDA_CORPUS";
+	FILE* fcorpus = fopen(corpus_name, "wb");
+	if (fcorpus == NULL) {
+		return -1;
+	}
 
-#if 0
+	char lda_corpus[10] = { 0 };
+	if (fread(lda_corpus, sizeof(lda_corpus), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (strncmp(LDA_CORPUS, lda_corpus, 10) != 0) {
+		std::cout << "not a valid lda corpus file\n";
+		return -1;
+	}
+
+	int D, W, N, wdsize;
+	int * ws = NULL;
+	int * ds = NULL;
+	char * wordstr = NULL;
+
+	if (fread(&D, sizeof(D), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (fread(&W, sizeof(W), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (fread(&wdsize, sizeof(wdsize), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	std::vector<int> doffset(D + 1);
+	if (fread(&doffset[0], sizeof(int)*(D + 1), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	N = doffset[D];
+	ds = (int *)malloc(sizeof(int) * N);
+	ws = (int *)malloc(sizeof(int) * N);
+	wordstr = (char *)malloc(sizeof(char)*wdsize);
+
+	if (ds == NULL || ws == NULL || wordstr) {
+		goto io_error;
+	}
+
+	for (int i = 0; i < D; i++) {
+		for (int p = doffset[i], q = doffset[i+1]; p < q; p++) ds[p] = i;
+	}
+
+	if (fread(ws, sizeof(int)*N , 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	if (fread(wordstr, sizeof(char)*wdsize , 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	input.N = N;
+	input.W = W;
+	input.D = D;
+	input.d = ds;
+	input.w = ws;
+
+	*words = wordstr;
+
+	return 0;
+
+io_error:
+	fclose(fcorpus);
+	free(ws);
+	free(ds);
+	free(wordstr);
+
+	return -1;
+}
+
+// words 以\n 分隔
+int lda_corpus_save(const char* corpus_name, int D, int W, int N, int *ds, int * ws, const char * words, size_t wdsize)
+{
+	// 文件格式: LDA_CORPUS + 文档数D(int 4 字节) + 总词汇数W + 词汇列表的字节总数wdsize
+	//  + (D+1)个int(每个文档开始的偏移值, 每个文档的范围为 [di, di+1) d0 = 0  ) + 每个文档的具体词语编号（长度为所有文档词的总和) 
+	//  + 词汇列表(以\n 分隔)
+	const char LDA_CORPUS[11] = "LDA_CORPUS";
+	FILE* fcorpus = fopen(corpus_name, "wb");
+
+	if (fseek(fcorpus, sizeof(LDA_CORPUS) - 1, SEEK_SET) != 0) {
+		goto io_error;
+	}
+	if (fwrite(&D, sizeof(D), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (fwrite(&W, sizeof(W), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (fwrite(&wdsize, sizeof(wdsize), 1, fcorpus) != 1) {
+		goto io_error;
+	}
+	if (fwrite(ds, sizeof(ds), D + 1, fcorpus) != D + 1) {
+		goto io_error;
+	}
+	if (fwrite(ws, sizeof(ws), N, fcorpus) != N) {
+		goto io_error;
+	}
+	if (fwrite(words, wdsize, 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	rewind(fcorpus);
+	if (fwrite(LDA_CORPUS, sizeof(LDA_CORPUS) - 1, 1, fcorpus) != 1) {
+		goto io_error;
+	}
+
+	fclose(fcorpus);
+	return 0;
+
+io_error:
+	fclose(fcorpus);
+	return -1;
+}
+
 // 还没开发完.
-void process_text3(std::string& docs_file, std::string& out_file)
+int process_text3(std::string& docs_file, std::string& out_file)
 {
 	using namespace std;
 
 	ifstream fdocs(docs_file, std::ios::in);
-	ofstream fwords(out_file + ".words.txt");
-	// 文件格式: LDA_CORPUS + 文档数D(int 4 字节) + 总词汇数
-	//  + D个int(每个文档词的个数) + 每个文档的具体词语编号（长度为所有文档词的总和) 
-	//  + 词汇列表(以\n 分隔)
-	const char LDA_CORPUS[11] = "LDA_CORPUS";
-	FILE* fws = fopen((out_file + ".ws").c_str(), "wb");
-	ofstream fds(out_file + ".ds.txt");
-	ofstream fws(out_file + ".ws.txt");
-	string line;
-
+	
 	std::unordered_map<std::string, int> words_map;
 
 	std::vector<std::string> docswords;
 	int W = 0;
-	int ntokens = 0;
-	int D = 0;
-	std::ostringstream ds;
-	std::ostringstream ws;
+	std::vector<int> ws;
 	std::ostringstream words;
+	std::vector<int> ds(1, 0);
+	size_t dpos = 0;
+	string line;
 	while (getline(fdocs, line)) {
 		split(line, '\t', &docswords);
 		if (docswords.size() > 0) {
@@ -712,24 +830,23 @@ void process_text3(std::string& docs_file, std::string& out_file)
 				} else {
 					wi = wordpos->second;
 				}
-
-				ntokens++;
-				ws << wi << "\n";
-				ds << D << "\n";
+				ws.push_back(wi);
 			});
-			D++;
+			dpos += docswords.size();
+			ds.push_back(dpos);
 		}
 		docswords.clear();
 	}
 
-	fds << ntokens << "\n" << ds.str();
-	fws << ntokens << "\n" << ws.str();
-	fwords << W << "\n" << words.str();
 	fdocs.close();
-	fds.close();
-	fws.close();
+
+	int N = ws.size();
+	assert(dpos == N);
+	int D = ds.size() - 1;
+	auto wstr = words.str();
+
+	return lda_corpus_save(out_file.c_str(), D, W, N, &ds[0], &ws[0], wstr.c_str(), wstr.size());
 }
-#endif
 
 void lda_train(int seed, std::string& corpus_name, std::string& out_name)
 {
@@ -768,6 +885,8 @@ void lda_train(int seed, std::string& corpus_name, std::string& out_name)
 	input.d = &d[0];
 	input.w = &w[0];
 
+	lda_corpus_load(&input);
+
 	lda_result* out = lda_result_create(input.N, conf.T, input.W, input.D);
 	auto time_start = std::time(0);
 	int info = gibbs_sampler_lda(conf, &input, out);
@@ -783,13 +902,11 @@ void lda_train(int seed, std::string& corpus_name, std::string& out_name)
 void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 {
 	lda_result* model = lda_result_load(model_name.c_str());
-
 	int W = 0;
 	std::ifstream fwords("corpus.words.txt", std::ios::in);
 	fwords >> W;
 
 	std::unordered_map<std::string, int> words_map;
-	std::vector<std::string> cihui(W);
 	for (size_t i = 0; i < W; i++) {
 		std::string str;
 		fwords >> str;
@@ -798,11 +915,10 @@ void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 
 	using namespace std;
 	ifstream fdocs(docs_name, std::ios::in);
-	ofstream fwords(docs_name + ".predict.txt");
+	ofstream fout(docs_name + ".predict.txt");
 	string line;
 
 	std::vector<std::string> docswords;
-	int ntokens = 0;
 	int D = 0;
 	std::ostringstream words;
 	std::vector<int> ws;
@@ -813,8 +929,7 @@ void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 			std::for_each(docswords.begin(), docswords.end(), [&](std::string word) {
 				// 如果训练词汇表里没有该词语,则忽略
 				auto wdpair = words_map.find(word);
-				if (wdpair == words_map.end()) {
-					ntokens++;
+				if (wdpair != words_map.end()) {
 					ws.push_back(wdpair->second);
 					ds.push_back(D);
 				}
@@ -832,13 +947,13 @@ void lda_predict(int seed, std::string& model_name, std::string& docs_name)
 	conf.seed = seed;
 
 // dp: size T, z :size N, w : size N
-	int N = 200;
+	int N = ws.size();
 	std::vector<int> z(N);
 	std::vector<int> dp(D*T);
 
 	gibbs_sampler_lda_predict(conf, &ws[0], &ds[0], N, D, model, &z[0], &dp[0]);
 
-	std::for_each(std::begin(dp), std::end(dp), [](int p) { std::cout << p << "\t"; });
+	std::for_each(std::begin(dp), std::end(dp), [&](int p) { fout << p << "\t"; });
 
 	lda_result_destroy(model);
 
@@ -857,7 +972,9 @@ void configure_parser(cmdline::parser& parser) {
 
 void print_usage(char* program)
 {
-	std::cout<< program << "usage:bbbbb\n" << std::endl;
+	auto usage = fmt::format(
+		"usage: {} subcmd [options] \n subcmd:preprocess, train, predict\n", program);
+	std::cout<<usage << std::endl;
 }
 
 void configure_parser_preprocess(cmdline::parser& parser) {
@@ -931,7 +1048,7 @@ try {
 
 		auto docs_file = parser.get<std::string>("docs");
 		auto out_file = parser.get<std::string>("output");
-		process_text2(docs_file, out_file);
+		process_text3(docs_file, out_file);
 	} else if (subcmd == "train") {
 		parser.set_program_name(std::string(argv[0]) +" " + argv[1]);
 		configure_parser_train(parser);
@@ -964,6 +1081,9 @@ try {
 		auto out_file = parser.get<std::string>("output");
 		int seed = argc;
 		std::cout << "corpus:" << corpus_file << "\tdocs:" << docs_file << std::endl;
+	} else {
+		print_usage(argv[0]);
+		return -1;
 	}
 	
 return		0;
@@ -992,7 +1112,3 @@ int __main(int argc, char*argv[])
 
 	return 0;
 }
-
-
-
-
